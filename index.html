@@ -1,15 +1,566 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>Reaction Time Experiment</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta
+    name="description"
+    content="A choice reaction time experiment with 2, 4, and 8 targets."
+  >
 
-    <script src="https://cdn.jsdelivr.net/npm/p5@1/lib/p5.min.js"></script>
+  <title>Reaction Test · Choice & response</title>
 
-    <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css">
+
+  <script src="supabase-config.js" defer></script>
+  <script src="results-store.js" defer></script>
+  <script src="sketch.js" defer></script>
 </head>
 
 <body>
-    <script src="sketch.js"></script>
+
+  <header class="masthead">
+    <a class="brand" href="index.html">
+      <span class="brand-mark" aria-hidden="true">↗</span>
+      Reaction<span class="brand-light">Test</span>
+    </a>
+
+    <span class="course">
+      CS 4065 / 6065
+    </span>
+  </header>
+
+  <main>
+
+    <!-- SETUP SCREEN -->
+    <section id="setup" class="setup">
+
+      <div class="intro">
+
+        <p class="eyebrow">
+          HUMAN FACTORS / CHOICE REACTION TIME
+        </p>
+
+        <h1>
+          Reaction Test by Afif Saba<br>
+        </h1>
+
+        <p class="lead">
+          One lit target. One click. Sixty trials.
+          Please follow the instructions bellow
+        </p>
+
+        <div class="protocol">
+          <div>
+            <strong>03</strong>
+            <span>blocks</span>
+          </div>
+
+          <div>
+            <strong>20</strong>
+            <span>trials per block</span>
+          </div>
+
+          <div>
+            <strong>2 → 4 → 8</strong>
+            <span>target choices</span>
+          </div>
+        </div>
+
+        <ol class="instructions">
+
+          <li>
+            <span>01</span>
+
+            <div>
+              <strong>Start at the center</strong>
+
+              <p>
+                Click Start to illuminate a randomly selected target.
+              </p>
+            </div>
+          </li>
+
+          <li>
+            <span>02</span>
+
+            <div>
+              <strong>Click the lit target</strong>
+
+              <p>
+                Move quickly and accurately. Misses count as errors;
+                keep going until you hit the target.
+              </p>
+            </div>
+          </li>
+
+          <li>
+            <span>03</span>
+
+            <div>
+              <strong>Reset, repeat, rest</strong>
+
+              <p>
+                Return to Start for each trial.
+                Take a break after each block of 20.
+              </p>
+            </div>
+          </li>
+
+        </ol>
+
+        <p class="setup-note">
+          Use a mouse or trackpad on a desktop or laptop.
+          Keep the same device and window size throughout the session.
+        </p>
+
+      </div>
+
+      <!-- SESSION CARD -->
+      <aside class="session-card">
+
+        <div class="mini-diagram" aria-hidden="true">
+          <i></i>
+          <i></i>
+          <i></i>
+          <i></i>
+          <b>start</b>
+        </div>
+
+        <p class="eyebrow">
+          READY WHEN YOU ARE
+        </p>
+
+        <h2>Begin a session</h2>
+
+        <p>
+          Enter the participant number assigned by your researcher.
+          Please do not enter your name.
+        </p>
+
+        <form id="session-form">
+
+          <label for="participant">
+            Participant number
+          </label>
+
+          <input
+            id="participant"
+            name="participant"
+            type="text"
+            inputmode="numeric"
+            pattern="[0-9]{1,6}"
+            maxlength="6"
+            placeholder="e.g. 01"
+            required
+            autocomplete="off"
+          >
+
+          <button class="primary" type="submit">
+            Enter experiment
+            <span aria-hidden="true">→</span>
+          </button>
+
+        </form>
+
+        <p class="privacy">
+          <span aria-hidden="true">●</span>
+          <span id="data-notice">
+            CSV backup is available.
+          </span>
+        </p>
+
+        <button
+          id="recover"
+          class="text-button"
+          hidden
+        >
+          Download previous session CSV
+        </button>
+
+      </aside>
+
+    </section>
+
+
+    <!-- EXPERIMENT SCREEN -->
+    <section
+      id="experiment"
+      class="experiment"
+      hidden
+    >
+
+      <!-- SIDEBAR -->
+      <aside class="sidebar">
+
+        <p class="eyebrow">
+          THE EXPERIMENT
+        </p>
+
+        <h1>
+          Choice &<br>
+          response.
+        </h1>
+
+        <p class="participant-tag">
+          PARTICIPANT
+          <strong id="participant-label"></strong>
+        </p>
+
+        <ol class="block-list">
+
+          <li data-block="0">
+            <span>01</span>
+
+            <div>
+              <strong>2 targets</strong>
+              <small>20 trials</small>
+            </div>
+
+            <b></b>
+          </li>
+
+          <li data-block="1">
+            <span>02</span>
+
+            <div>
+              <strong>4 targets</strong>
+              <small>20 trials</small>
+            </div>
+
+            <b></b>
+          </li>
+
+          <li data-block="2">
+            <span>03</span>
+
+            <div>
+              <strong>8 targets</strong>
+              <small>20 trials</small>
+            </div>
+
+            <b></b>
+          </li>
+
+        </ol>
+
+        <div class="sidebar-note">
+
+          <strong>
+            Quick. Accurate. Consistent.
+          </strong>
+
+          <p>
+            Click Start, then the highlighted target.
+            A short tone confirms a successful hit.
+          </p>
+
+          <p>
+            Timing includes the movement to the target
+            and any corrections after a miss.
+          </p>
+
+        </div>
+
+        <button
+          id="download-partial"
+          class="text-button"
+          disabled
+        >
+          Download collected data ↓
+        </button>
+
+      </aside>
+
+
+      <!-- WORKSPACE -->
+      <div class="workspace">
+
+        <div class="trial-header">
+
+          <div>
+            <p
+              class="eyebrow"
+              id="block-label"
+            >
+              BLOCK 01 / 03
+            </p>
+
+            <h2 id="trial-label">
+              Trial 01
+              <span>/ 20</span>
+            </h2>
+          </div>
+
+          <span
+            id="status"
+            class="status"
+            role="status"
+          >
+            Ready to start
+          </span>
+
+        </div>
+
+
+        <!-- PROGRESS BAR -->
+        <div class="progress-track">
+          <div id="progress"></div>
+        </div>
+
+
+        <!-- EXPERIMENT ARENA -->
+        <div
+          id="arena"
+          class="arena"
+          aria-label="Reaction time experiment area"
+        >
+
+          <div
+            class="orbit"
+            aria-hidden="true"
+          ></div>
+
+          <div id="targets"></div>
+
+          <button
+            id="start"
+            class="start-button"
+          >
+            Start
+          </button>
+
+
+          <!-- BLOCK OVERLAY -->
+          <div
+            id="overlay"
+            class="overlay"
+            hidden
+          >
+
+            <p
+              class="eyebrow"
+              id="overlay-eyebrow"
+            ></p>
+
+            <h2 id="overlay-title"></h2>
+
+            <p id="overlay-text"></p>
+
+            <button
+              id="continue"
+              class="primary"
+            >
+              Click to continue
+              <span aria-hidden="true">→</span>
+            </button>
+
+          </div>
+
+        </div>
+
+
+        <!-- ARENA FOOTER -->
+        <div class="arena-footer">
+
+          <p
+            id="hint"
+            role="status"
+          >
+            Click the center button when you’re ready.
+          </p>
+
+          <span id="saved-count">
+            0 / 60 trials saved
+          </span>
+
+        </div>
+
+        <p
+          id="storage-warning"
+          class="warning"
+          hidden
+        >
+          Browser storage is unavailable.
+          Download your data before closing this page.
+        </p>
+
+      </div>
+
+    </section>
+
+
+    <!-- RESULTS SCREEN -->
+    <section
+      id="results"
+      class="results"
+      hidden
+    >
+
+      <p class="eyebrow">
+        SESSION COMPLETE
+      </p>
+
+      <h1>
+        Every response counts.
+      </h1>
+
+      <p class="lead">
+        Thank you, participant
+        <strong id="result-participant"></strong>.
+        Your 60 trials are ready to export.
+      </p>
+
+
+      <!-- RESULT SUMMARY -->
+      <div class="result-top">
+
+        <div>
+          <span>TRIALS RECORDED</span>
+
+          <strong>
+            60
+            <small>/ 60</small>
+          </strong>
+        </div>
+
+        <div>
+          <span>MEAN COMPLETION TIME</span>
+          <strong id="overall-time"></strong>
+        </div>
+
+        <div>
+          <span>TOTAL ERRORS</span>
+          <strong id="overall-errors"></strong>
+        </div>
+
+      </div>
+
+
+      <!-- RESULTS TABLE -->
+      <div class="table-wrap">
+
+        <table>
+
+          <caption>
+            Results by block
+          </caption>
+
+          <thead>
+            <tr>
+              <th scope="col">Block</th>
+              <th scope="col">Targets</th>
+              <th scope="col">Trials</th>
+              <th scope="col">Mean time (ms)</th>
+              <th scope="col">Mean errors / trial</th>
+            </tr>
+          </thead>
+
+          <tbody id="results-body"></tbody>
+
+        </table>
+
+      </div>
+
+
+      <p class="result-note">
+        Completion time runs from target illumination
+        to the successful click, including any error corrections.
+      </p>
+
+
+      <!-- RESULT ACTIONS -->
+      <div class="result-actions">
+
+        <button
+          id="download"
+          class="primary"
+        >
+          Download CSV ↓
+        </button>
+
+        <button
+          id="copy"
+          class="secondary"
+        >
+          Copy CSV
+        </button>
+
+        <button
+          id="new-session"
+          class="text-button"
+        >
+          New participant →
+        </button>
+
+      </div>
+
+
+      <p
+        id="export-status"
+        role="status"
+      ></p>
+
+
+      <details>
+
+        <summary>
+          View trial data
+        </summary>
+
+        <label
+          for="csv-preview"
+          class="sr-only"
+        >
+          CSV trial data
+        </label>
+
+        <textarea
+          id="csv-preview"
+          readonly
+          rows="10"
+        ></textarea>
+
+      </details>
+
+    </section>
+
+
+    <!-- DATABASE STATUS -->
+    <div class="database-panel">
+
+      <p
+        id="database-status"
+        role="status"
+      ></p>
+
+      <button
+        id="retry-upload"
+        class="text-button"
+        hidden
+      >
+        Retry database upload
+      </button>
+
+    </div>
+
+  </main>
+
+
+  <!-- FOOTER -->
+  <footer class="site-footer">
+
+    <span>
+      REACTION LAB
+      <span class="footer-divider">/</span>
+      Human factors in action
+    </span>
+
+    <span>
+      2, 4 & 8 choices · 60 measured trials
+    </span>
+
+  </footer>
+
 </body>
 </html>
