@@ -15,7 +15,8 @@ let target = -1;
 let startedAt = 0;
 let errors = 0;
 let targetButtons = [];
-let audioContext;
+const successSound = new Audio('press.mp3');
+successSound.preload = 'auto';
 let resumePhase = 'ready';
 let previousCSV = '';
 let previousParticipant = '';
@@ -79,27 +80,11 @@ function exportCurrent() {
   hasExported = true;
   $('export-status').textContent = 'CSV download requested.';
 }
-function initAudio() {
-  try {
-    const Audio = window.AudioContext || window.webkitAudioContext;
-    if (!audioContext && Audio) audioContext = new Audio();
-    if (audioContext?.state === 'suspended') audioContext.resume().catch(() => {});
-  } catch { /* Audio failure must not stop collection. */ }
-}
 function playSuccess() {
-  if (!audioContext || audioContext.state !== 'running') return;
-  const oscillator = audioContext.createOscillator();
-  const gain = audioContext.createGain();
-  const now = audioContext.currentTime;
-  oscillator.frequency.value = 740;
-  gain.gain.setValueAtTime(0, now);
-  gain.gain.linearRampToValueAtTime(0.09, now + 0.005);
-  gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
-  oscillator.connect(gain);
-  gain.connect(audioContext.destination);
-  oscillator.start(now);
-  oscillator.stop(now + 0.09);
-  oscillator.onended = () => { oscillator.disconnect(); gain.disconnect(); };
+  try {
+    successSound.currentTime = 0;
+    void successSound.play().catch(() => {});
+  } catch { /* Audio failure must not stop collection. */ }
 }
 function blockRows() { return rows.filter(r => r.block === block + 1); }
 function updateProgress() {
@@ -163,7 +148,6 @@ function pause(reason) {
 }
 function startTrial() {
   if (!spaceAvailable()) { pause('Enlarge your browser window to fit the target area.'); return; }
-  initAudio();
   errors = 0;
   target = Math.floor(Math.random() * COUNTS[block]);
   targetButtons[target].classList.add('lit');
@@ -221,7 +205,6 @@ $('session-form').addEventListener('submit', event => {
   sessionId = resultStore.newSession();
   $('setup').hidden = true;
   $('experiment').hidden = false;
-  initAudio();
   console.log(HEADER);
   drawTargets(); ready();
   if (!spaceAvailable()) pause('Enlarge your browser window to fit the target area.');
