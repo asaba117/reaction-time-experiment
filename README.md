@@ -11,3 +11,5 @@ Hosted using Github Pages, no need to run locally.
 4. Return to Start for each new trial. After 20 successful trials, rest and click Continue for the next block.
 5. Complete all three blocks. With Supabase configured, wait for the database status to confirm that all queued results are saved. Download CSV as a backup; copying and an on-page text view are also available.
 6. Export before choosing New participant. Use a distinct participant number for each person.
+
+The completion screen says “Saving results…” until the database confirms the final upload. Keep it open until it says “All results saved.” Failed uploads retry automatically at rest points; Retry saving and CSV export remain available. Unsaved trials are backed up in the same browser and retried when the experiment is reopened there.

@@ -14,6 +14,10 @@ function createResultsStore(config = {}, dependencies = {}) {
   const onChange = dependencies.onChange ?? (() => {});
   const timeoutMs = dependencies.timeoutMs ?? 15000;
   const canUpload = dependencies.canUpload ?? (() => true);
+  // Keep requests below the browser's 64 KiB keepalive body limit, including
+  // restored queues containing more than one participant's results.
+  const maxUploadBytes = 48 * 1024;
+  const encoder = new TextEncoder();
   const requestedIds = new Set();
   let endpoint = '';
   let uploadEndpoint = '';
@@ -153,6 +157,18 @@ function createResultsStore(config = {}, dependencies = {}) {
     persist();
     // No status updates during an active trial; the caller renders at safe points.
   }
+  function requestedBatch() {
+    const batch = [];
+    let bytes = encoder.encode('{"trials":[]}').byteLength;
+    for (const record of pending) {
+      if (!requestedIds.has(record.client_record_id)) continue;
+      const addedBytes = encoder.encode(JSON.stringify(record)).byteLength + (batch.length ? 1 : 0);
+      if (bytes + addedBytes > maxUploadBytes) break;
+      batch.push(record);
+      bytes += addedBytes;
+    }
+    return batch;
+  }
   function flush() {
     if (!endpoint) { emit(); return Promise.resolve(); }
     // A flush requests the records that exist now. Enqueue alone never starts
@@ -164,7 +180,7 @@ function createResultsStore(config = {}, dependencies = {}) {
     inFlight = Promise.resolve().then(async () => {
       try {
         while (requestedIds.size && canUpload()) {
-          const batch = pending.filter(record => requestedIds.has(record.client_record_id || record.id));
+          const batch = requestedBatch();
           if (!batch.length) { requestedIds.clear(); break; }
           const controller = new AbortController();
           const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -182,6 +198,7 @@ function createResultsStore(config = {}, dependencies = {}) {
               method: 'POST',
               headers,
               body: JSON.stringify({trials: batch}),
+              keepalive: true,
               signal: controller.signal
             });
             if (!response.ok) {

@@ -42,6 +42,7 @@ function uniqueServer({loseFirstResponse = false} = {}) {
       requests.push({url, ...options});
       assert.equal(url, config.url + '/rest/v1/rpc/upload_reaction_trials');
       assert.equal(options.method, 'POST');
+      assert.equal(options.keepalive, true, 'uploads must be allowed to continue after the page closes');
       assert.equal(options.headers.apikey, config.publishableKey);
       assert.equal(options.headers.Authorization, undefined, 'publishable keys are not JWT bearer tokens');
       const payload = JSON.parse(options.body).trials;
@@ -366,4 +367,48 @@ test('oversized restored IDs are skipped without discarding their original backu
   assert.equal(storage.getItem(prefix + validId), null);
   assert.ok(results.status().recoveryError);
   assert.equal(results.status().durable, false);
+});
+
+test('a large restored queue uses bounded keepalive requests without losing any blocks', async () => {
+  const records = Array.from({length: 180}, (_, i) => saved('界'.repeat(150) + ':' + i, {
+    block_number: Math.floor(i / 20) % 3 + 1,
+    trial_number: i % 20 + 1
+  }));
+  const storage = memoryStorage(records.map(record => [prefix + record.client_record_id, JSON.stringify(record)]));
+  const server = uniqueServer();
+  const results = store(storage, server.fetch);
+  await results.flush();
+  assert.ok(server.requests.length > 1);
+  for (const request of server.requests) {
+    assert.ok(Buffer.byteLength(request.body, 'utf8') < 64 * 1024, 'request must fit the browser keepalive quota');
+    assert.ok(JSON.parse(request.body).trials.length > 0);
+  }
+  assert.equal(server.rows.size, records.length);
+  assert.deepEqual([...server.rows.values()], records);
+  assert.equal(results.status().pending, 0);
+  assert.equal(storage.length, 0);
+});
+
+test('a failed earlier upload preserves the final block for the next safe retry', async () => {
+  const storage = memoryStorage();
+  const server = uniqueServer();
+  let rejectFirst;
+  let requests = 0;
+  const results = store(storage, async (url, options) => {
+    if (++requests === 1) return new Promise((resolve, reject) => { rejectFirst = reject; });
+    return server.fetch(url, options);
+  });
+  results.enqueue('late-upload', row({block: 2}));
+  const earlierUpload = results.flush();
+  await Promise.resolve();
+  for (let trial = 1; trial <= 20; trial++) results.enqueue('late-upload', row({block: 3, trial}));
+  const finalUpload = results.flush();
+  rejectFirst(Error('Earlier block upload failed'));
+  await Promise.all([earlierUpload, finalUpload]);
+  assert.equal(results.status().pending, 21);
+  assert.equal(storage.length, 21);
+  await results.flush();
+  assert.equal(server.rows.size, 21);
+  assert.equal([...server.rows.values()].filter(record => record.block_number === 3).length, 20);
+  assert.equal(results.status().pending, 0);
 });

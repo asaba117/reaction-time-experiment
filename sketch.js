@@ -22,9 +22,16 @@ let previousCSV = '';
 let previousParticipant = '';
 let hasExported = false;
 let sessionId = null;
+const UPLOAD_RETRY_DELAYS = [1000, 3000, 10000];
+let uploadRetryTimer = null;
+let uploadRetryAttempt = 0;
+function canUploadResults() { return !['active', 'ready'].includes(phase); }
 const resultStore = window.createResultsStore(window.SUPABASE_CONFIG, {
-  canUpload: () => !['active', 'ready'].includes(phase),
-  onChange: () => { if (phase !== 'active') updateDatabaseStatus(); }
+  canUpload: canUploadResults,
+  onChange: () => {
+    if (phase !== 'active') updateDatabaseStatus();
+    scheduleUploadRetry();
+  }
 });
 
 function updateDatabaseStatus() {
@@ -43,8 +50,35 @@ function updateDatabaseStatus() {
   $('retry-upload').hidden = !state.pending || ['active', 'ready'].includes(phase);
   $('retry-upload').disabled = state.uploading;
   $('data-notice').textContent = state.configured ? 'Results are saved to the researcher’s database.' : 'Results stay in this browser. Download CSV to keep a copy.';
+  if (phase === 'complete') {
+    const waiting = state.configured && state.pending > 0;
+    $('results-title').textContent = waiting ? 'Saving results…' : 'Test complete';
+    $('completion-status').textContent = waiting
+      ? 'Keep this page open until your results are saved. ' + message + ' You can also download CSV as a backup.'
+      : state.configured ? (state.recoveryError ? message : 'All results saved. You can close this page.')
+        : 'Download CSV to save your results before closing this page.';
+    $('new-session').disabled = waiting && !hasExported;
+  }
+}
+function cancelUploadRetry() {
+  if (uploadRetryTimer !== null) clearTimeout(uploadRetryTimer);
+  uploadRetryTimer = null;
+}
+function scheduleUploadRetry() {
+  const state = resultStore.status();
+  if (!state.pending) { cancelUploadRetry(); uploadRetryAttempt = 0; return; }
+  if (!canUploadResults() || state.uploading || !state.lastError ||
+      uploadRetryTimer !== null || uploadRetryAttempt >= UPLOAD_RETRY_DELAYS.length) return;
+  uploadRetryTimer = setTimeout(() => {
+    uploadRetryTimer = null;
+    if (!canUploadResults()) return;
+    uploadRetryAttempt += 1;
+    void resultStore.flush();
+  }, UPLOAD_RETRY_DELAYS[uploadRetryAttempt]);
 }
 function syncAtBreak() {
+  cancelUploadRetry();
+  uploadRetryAttempt = 0;
   updateDatabaseStatus();
   void resultStore.flush();
 }
@@ -79,6 +113,7 @@ function exportCurrent() {
   downloadCSV(csv(), participant);
   hasExported = true;
   $('export-status').textContent = 'CSV download requested.';
+  updateDatabaseStatus();
 }
 function playSuccess() {
   try {
@@ -117,6 +152,7 @@ function clearTarget() {
   target = -1;
 }
 function ready() {
+  cancelUploadRetry();
   clearTarget();
   phase = 'ready';
   $('overlay').hidden = true;
@@ -235,7 +271,7 @@ $('download-partial').addEventListener('click', () => {
 $('download').addEventListener('click', exportCurrent);
 $('recover').addEventListener('click', () => downloadCSV(previousCSV, previousParticipant));
 $('copy').addEventListener('click', async () => {
-  try { await navigator.clipboard.writeText(csv()); hasExported = true; $('export-status').textContent = 'CSV copied to clipboard.'; }
+  try { await navigator.clipboard.writeText(csv()); hasExported = true; $('export-status').textContent = 'CSV copied to clipboard.'; updateDatabaseStatus(); }
   catch { $('csv-preview').parentElement.open = true; $('csv-preview').focus(); $('csv-preview').select(); $('export-status').textContent = 'Automatic copying is unavailable. The CSV is selected below; press Ctrl+C (or Command+C).'; }
 });
 $('new-session').addEventListener('click', () => {
@@ -248,7 +284,7 @@ $('new-session').addEventListener('click', () => {
   $('participant').value = '';
   $('export-status').textContent = '';
   $('participant').focus();
-  updateDatabaseStatus();
+  syncAtBreak();
 });
 $('retry-upload').addEventListener('click', () => {
   if (!['active', 'ready'].includes(phase)) syncAtBreak();
@@ -257,7 +293,16 @@ window.addEventListener('online', () => {
   if (!['active', 'ready'].includes(phase)) syncAtBreak();
 });
 window.addEventListener('blur', () => pause('The experiment lost focus. Return to the experiment before resuming.'));
-document.addEventListener('visibilitychange', () => { if (document.hidden) pause('The experiment was hidden.'); });
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    pause('The experiment was hidden.');
+    syncAtBreak();
+  }
+});
+window.addEventListener('pagehide', () => {
+  pause('The experiment page was left.');
+  syncAtBreak();
+});
 window.addEventListener('resize', () => pause('The window size changed. Keep its size and zoom constant during the study.'));
 window.addEventListener('beforeunload', event => {
   if (resultStore.status().pending || (rows.length && !hasExported && !resultStore.status().configured)) { event.preventDefault(); event.returnValue = ''; }
