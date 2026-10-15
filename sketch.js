@@ -21,67 +21,6 @@ let resumePhase = 'ready';
 let previousCSV = '';
 let previousParticipant = '';
 let hasExported = false;
-let sessionId = null;
-const UPLOAD_RETRY_DELAYS = [1000, 3000, 10000];
-let uploadRetryTimer = null;
-let uploadRetryAttempt = 0;
-function canUploadResults() { return !['active', 'ready'].includes(phase); }
-const resultStore = window.createResultsStore(window.SUPABASE_CONFIG, {
-  canUpload: canUploadResults,
-  onChange: () => {
-    if (phase !== 'active') updateDatabaseStatus();
-    scheduleUploadRetry();
-  }
-});
-
-function updateDatabaseStatus() {
-  const state = resultStore.status();
-  let message;
-  if (state.configurationError) message = 'Database setup needs attention: ' + state.configurationError + ' CSV export is available.';
-  else if (!state.configured) message = 'Download CSV to save your results.';
-  else if (state.uploading) message = 'Saving results…';
-  else if (state.pending) message = state.pending + ' trials waiting to save.' + (state.lastError ? ' ' + state.lastError : '');
-  else message = state.uploaded ? 'Results saved.' : 'Results save after each block.';
-  if (state.recoveryError) message += ' ' + state.recoveryError;
-  else if (!state.durable) message += ' Local upload backup is unavailable; keep this page open and export CSV.';
-  $('database-status').textContent = message;
-  $('database-panel').hidden = ['active', 'ready'].includes(phase) ||
-    (phase === 'setup' && !state.pending && !state.configurationError && state.durable);
-  $('retry-upload').hidden = !state.pending || ['active', 'ready'].includes(phase);
-  $('retry-upload').disabled = state.uploading;
-  $('data-notice').textContent = state.configured ? 'Results are saved to the researcher’s database.' : 'Results stay in this browser. Download CSV to keep a copy.';
-  if (phase === 'complete') {
-    const waiting = state.configured && state.pending > 0;
-    $('results-title').textContent = waiting ? 'Saving results…' : 'Test complete';
-    $('completion-status').textContent = waiting
-      ? 'Keep this page open until your results are saved. ' + message + ' You can also download CSV as a backup.'
-      : state.configured ? (state.recoveryError ? message : 'All results saved. You can close this page.')
-        : 'Download CSV to save your results before closing this page.';
-    $('new-session').disabled = waiting && !hasExported;
-  }
-}
-function cancelUploadRetry() {
-  if (uploadRetryTimer !== null) clearTimeout(uploadRetryTimer);
-  uploadRetryTimer = null;
-}
-function scheduleUploadRetry() {
-  const state = resultStore.status();
-  if (!state.pending) { cancelUploadRetry(); uploadRetryAttempt = 0; return; }
-  if (!canUploadResults() || state.uploading || !state.lastError ||
-      uploadRetryTimer !== null || uploadRetryAttempt >= UPLOAD_RETRY_DELAYS.length) return;
-  uploadRetryTimer = setTimeout(() => {
-    uploadRetryTimer = null;
-    if (!canUploadResults()) return;
-    uploadRetryAttempt += 1;
-    void resultStore.flush();
-  }, UPLOAD_RETRY_DELAYS[uploadRetryAttempt]);
-}
-function syncAtBreak() {
-  cancelUploadRetry();
-  uploadRetryAttempt = 0;
-  updateDatabaseStatus();
-  void resultStore.flush();
-}
 
 function csv(records = rows) {
   return [HEADER, ...records.map(r => [r.user, r.block, r.trial, r.elapsedTime, r.numberOfErrors].join(','))].join('\r\n') + '\r\n';
@@ -112,8 +51,7 @@ function downloadCSV(content, user) {
 function exportCurrent() {
   downloadCSV(csv(), participant);
   hasExported = true;
-  $('export-status').textContent = 'CSV download requested.';
-  updateDatabaseStatus();
+  $('export-status').textContent = 'CSV download requested. Send the file to the researcher.';
 }
 function playSuccess() {
   try {
@@ -152,14 +90,12 @@ function clearTarget() {
   target = -1;
 }
 function ready() {
-  cancelUploadRetry();
   clearTarget();
   phase = 'ready';
   $('overlay').hidden = true;
   $('start').setAttribute('aria-disabled', 'false');
   $('hint').textContent = 'Click Start when you’re ready.';
   updateProgress();
-  updateDatabaseStatus();
 }
 function showOverlay(eyebrow, title, message, action = 'Continue') {
   $('overlay-eyebrow').textContent = eyebrow;
@@ -179,8 +115,7 @@ function pause(reason) {
   clearTarget();
   phase = 'paused';
   $('hint').textContent = 'Test paused.';
-  showOverlay('Paused', 'Test paused', reason + (wasActive ? ' This trial will restart.' : '') + ' Completed trials are saved.', 'Resume test');
-  updateDatabaseStatus();
+  showOverlay('Paused', 'Test paused', reason + (wasActive ? ' This trial will restart.' : '') + ' Completed trials are still available to export.', 'Resume test');
 }
 function startTrial() {
   if (!spaceAvailable()) { pause('Enlarge your browser window to fit the target area.'); return; }
@@ -190,8 +125,6 @@ function startTrial() {
   targetButtons[target].setAttribute('aria-label', 'Highlighted target ' + (target + 1));
   startedAt = performance.now();
   phase = 'active';
-  $('database-panel').hidden = true;
-  $('retry-upload').hidden = true;
   $('start').setAttribute('aria-disabled', 'true');
   $('hint').textContent = 'Click the highlighted target.';
 }
@@ -204,18 +137,15 @@ function completeTrial() {
   clearTarget();
   playSuccess();
   save();
-  resultStore.enqueue(sessionId, record);
   updateProgress();
   if (blockRows().length < TRIALS) { ready(); return; }
   if (block === COUNTS.length - 1) { finish(); return; }
   phase = 'break';
-  syncAtBreak();
   $('hint').textContent = 'Rest before continuing to the next block.';
   showOverlay('Block ' + (block + 1) + ' complete', 'Take a break', 'Next: ' + COUNTS[block + 1] + ' targets. Continue when you’re ready.');
 }
 function finish() {
   phase = 'complete';
-  syncAtBreak();
   $('experiment').hidden = true;
   $('results').hidden = false;
   $('result-participant').textContent = participant;
@@ -238,7 +168,6 @@ $('session-form').addEventListener('submit', event => {
   const value = $('participant').value.trim();
   if (!/^\d{1,6}$/.test(value)) { $('participant').focus(); return; }
   participant = value; rows = []; block = 0; hasExported = false;
-  sessionId = resultStore.newSession();
   $('setup').hidden = true;
   $('experiment').hidden = false;
   console.log(HEADER);
@@ -271,12 +200,11 @@ $('download-partial').addEventListener('click', () => {
 $('download').addEventListener('click', exportCurrent);
 $('recover').addEventListener('click', () => downloadCSV(previousCSV, previousParticipant));
 $('copy').addEventListener('click', async () => {
-  try { await navigator.clipboard.writeText(csv()); hasExported = true; $('export-status').textContent = 'CSV copied to clipboard.'; updateDatabaseStatus(); }
+  try { await navigator.clipboard.writeText(csv()); hasExported = true; $('export-status').textContent = 'CSV copied to clipboard.'; }
   catch { $('csv-preview').parentElement.open = true; $('csv-preview').focus(); $('csv-preview').select(); $('export-status').textContent = 'Automatic copying is unavailable. The CSV is selected below; press Ctrl+C (or Command+C).'; }
 });
 $('new-session').addEventListener('click', () => {
-  const stored = resultStore.status().configured && resultStore.status().pending === 0;
-  if (!hasExported && !stored && !window.confirm('Your data has not been exported. Start a new participant anyway?')) return;
+  if (!hasExported && !window.confirm('Your data has not been exported. Start a new participant anyway?')) return;
   recoverSaved();
   phase = 'setup';
   $('results').hidden = true;
@@ -284,29 +212,18 @@ $('new-session').addEventListener('click', () => {
   $('participant').value = '';
   $('export-status').textContent = '';
   $('participant').focus();
-  syncAtBreak();
-});
-$('retry-upload').addEventListener('click', () => {
-  if (!['active', 'ready'].includes(phase)) syncAtBreak();
-});
-window.addEventListener('online', () => {
-  if (!['active', 'ready'].includes(phase)) syncAtBreak();
 });
 window.addEventListener('blur', () => pause('The experiment lost focus. Return to the experiment before resuming.'));
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     pause('The experiment was hidden.');
-    syncAtBreak();
   }
 });
 window.addEventListener('pagehide', () => {
   pause('The experiment page was left.');
-  syncAtBreak();
 });
 window.addEventListener('resize', () => pause('The window size changed. Keep its size and zoom constant during the study.'));
 window.addEventListener('beforeunload', event => {
-  if (resultStore.status().pending || (rows.length && !hasExported && !resultStore.status().configured)) { event.preventDefault(); event.returnValue = ''; }
+  if (rows.length && !hasExported) { event.preventDefault(); event.returnValue = ''; }
 });
 recoverSaved();
-updateDatabaseStatus();
-void resultStore.flush();

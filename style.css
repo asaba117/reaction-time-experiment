@@ -30,7 +30,7 @@ button:focus-visible, input:focus-visible, summary:focus-visible, textarea:focus
   outline-offset: 4px;
 }
 [hidden] { display: none !important; }
-.muted, .hint, details, #export-status, .database-panel {
+.muted, .hint, details, #export-status {
   color: var(--muted);
   font-size: 13px;
 }
@@ -163,8 +163,6 @@ textarea {
   font: 12px/1.5 monospace;
 }
 .warning { color: #855318; font-size: 13px; margin-top: 16px; }
-.database-panel { margin-top: 16px; }
-.database-panel p { margin: 0; }
 .sr-only {
   position: absolute;
   width: 1px;

@@ -5,10 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="A reaction time test with 2, 4, and 8 targets.">
   <title>Reaction Time Test</title>
-  <link rel="stylesheet" href="style.css">
-  <script src="supabase-config.js" defer></script>
-  <script src="results-store.js" defer></script>
-  <script src="sketch.js" defer></script>
+  <link rel="stylesheet" href="style.css?v=20261014-4">
+  <script src="sketch.js?v=20261014-4" defer></script>
 </head>
 <body>
   <main>
@@ -23,7 +21,7 @@
           pattern="[0-9]{1,6}" maxlength="6" placeholder="e.g. 01" required autocomplete="off">
         <button class="primary" type="submit">Begin test</button>
       </form>
-      <p id="data-notice" class="muted">CSV export is available.</p>
+      <p id="data-notice" class="muted">After the test, download your CSV and send it to the researcher.</p>
       <button id="recover" class="text-button" hidden>Download previous session CSV</button>
     </section>
 
@@ -48,7 +46,7 @@
 
     <section id="results" hidden aria-labelledby="results-title">
       <h1 id="results-title">Test complete</h1>
-      <p id="completion-status" role="status"></p>
+      <p id="completion-status" role="status">Download your CSV and send it to the researcher before closing this page.</p>
       <p class="muted">Participant <strong id="result-participant"></strong> · 60 trials</p>
       <dl class="result-summary">
         <div><dt>Mean time</dt><dd id="overall-time"></dd></div>
@@ -86,10 +84,6 @@
     <p id="storage-warning" class="warning" role="status" hidden>
       Browser storage is unavailable. Download your data before closing this page.
     </p>
-    <div id="database-panel" class="database-panel" hidden>
-      <p id="database-status" role="status"></p>
-      <button id="retry-upload" class="text-button" hidden>Retry saving</button>
-    </div>
   </main>
 </body>
 </html>

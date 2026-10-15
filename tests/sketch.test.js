@@ -7,10 +7,12 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const root = path.resolve(__dirname, '..');
-const config = {url: 'https://experiment.supabase.co', publishableKey: 'sb_publishable_test'};
-const success = () => ({ok: true, status: 204});
-const failure = () => ({ok: false, status: 503, json: async () => ({message: 'Temporarily unavailable'})});
-async function settle() { for (let i = 0; i < 12; i++) await Promise.resolve(); }
+const header = 'user#,block#,trial#,elapsedTime,numberOfErrors';
+async function settle() { for (let i = 0; i < 6; i++) await Promise.resolve(); }
+function memoryStorage() {
+  const values = new Map();
+  return {getItem: key => values.get(key) ?? null, setItem: (key, value) => values.set(key, String(value))};
+}
 
 class Events {
   constructor() { this.listeners = new Map(); }
@@ -27,15 +29,8 @@ class Events {
 class Element extends Events {
   constructor() {
     super();
-    this.children = [];
-    this.attributes = new Map();
-    this.className = '';
-    this.style = {};
-    this.dataset = {};
-    this.hidden = false;
-    this.disabled = false;
-    this.value = '';
-    this.textContent = '';
+    Object.assign(this, {children: [], attributes: new Map(), className: '', style: {}, dataset: {},
+      hidden: false, disabled: false, value: '', textContent: ''});
     this.classList = {
       contains: name => this.className.split(/\s+/).includes(name),
       add: name => { if (!this.classList.contains(name)) this.className += ' ' + name; },
@@ -47,71 +42,57 @@ class Element extends Events {
   replaceChildren(...children) { this.children = []; children.forEach(child => this.append(child)); }
   closest(selector) { return selector === '.target' && this.classList.contains('target') ? this : null; }
   getBoundingClientRect() { return {width: 500, height: 500}; }
-  focus() {}
-  select() {}
-  click() {}
+  focus() { this.focused = true; }
+  select() { this.selected = true; }
 }
 
-// Run the browser entry points together so regressions in the block transitions,
-// upload callbacks, and completion UI cannot hide behind store-only unit tests.
-function browser(respond = async () => success()) {
+// Execute the scripts declared by the real HTML, with observable download and
+// clipboard APIs, rather than substituting an implementation of the experiment.
+function browser({storage = memoryStorage(), clipboard = true, confirm = () => true, legacyMarkup = false} = {}) {
+  let markup = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  if (legacyMarkup) markup = markup.replace(/<p\b[^>]*\bid="completion-status"[^>]*>[\s\S]*?<\/p>/, '');
   const elements = new Map();
-  for (const tag of fs.readFileSync(path.join(root, 'index.html'), 'utf8').matchAll(/<[^>]+\bid="([^"]+)"[^>]*>/g)) {
+  for (const tag of markup.matchAll(/<[^>]+\bid="([^"]+)"[^>]*>/g)) {
     const element = new Element();
     element.hidden = /\bhidden\b/.test(tag[0]);
     element.disabled = /\bdisabled\b/.test(tag[0]);
+    element.textContent = markup.slice(tag.index + tag[0].length).match(/^([^<]*)</)?.[1] ?? '';
     elements.set(tag[1], element);
   }
   const document = new Events();
-  document.hidden = false;
-  document.getElementById = id => {
-    assert.ok(elements.has(id), 'Missing actual HTML element: ' + id);
-    return elements.get(id);
-  };
-  document.createElement = () => new Element();
-  document.getElementById('csv-preview').parentElement = new Element();
   const window = new Events();
-  window.SUPABASE_CONFIG = config;
-  window.confirm = () => true;
-  const values = new Map();
-  const localStorage = {
-    get length() { return values.size; },
-    key: index => [...values.keys()][index] ?? null,
-    getItem: key => values.get(key) ?? null,
-    setItem: (key, value) => values.set(key, String(value)),
-    removeItem: key => values.delete(key)
-  };
-  const timers = new Map();
-  const requests = [];
+  const downloads = [];
+  const copied = [];
+  const confirmations = [];
+  const network = [];
+  const blobs = new Map();
   let clock = 0;
-  let timerId = 0;
-  let session = 0;
+  document.hidden = false;
+  document.getElementById = id => elements.get(id) ?? null;
+  document.createElement = tag => {
+    const element = new Element();
+    if (tag === 'a') element.click = () => downloads.push({filename: element.download, blob: blobs.get(element.href)});
+    return element;
+  };
+  document.getElementById('csv-preview').parentElement = new Element();
+  window.confirm = message => { confirmations.push(message); return confirm(); };
   class BrowserURL extends URL {
-    static createObjectURL() { return 'blob:test'; }
-    static revokeObjectURL() {}
+    static createObjectURL(blob) { const url = 'blob:test-' + blobs.size; blobs.set(url, blob); return url; }
+    static revokeObjectURL(url) { blobs.delete(url); }
   }
   const context = vm.createContext({
-    window, document, localStorage, URL: BrowserURL, Blob, TextEncoder, AbortController,
-    atob, crypto: {randomUUID: () => 'session-' + ++session},
+    window, document, localStorage: storage, URL: BrowserURL, Blob,
     performance: {now: () => clock}, console: {log() {}},
-    navigator: {clipboard: {writeText: async () => {}}},
+    navigator: {clipboard: {writeText: async text => {
+      if (!clipboard) throw Error('Clipboard unavailable');
+      copied.push(text);
+    }}},
     Audio: class { play() { return Promise.resolve(); } },
-    setTimeout: (callback, delay) => {
-      const id = ++timerId;
-      timers.set(id, {callback, due: clock + delay});
-      return id;
-    },
-    clearTimeout: id => timers.delete(id),
-    fetch: async (url, options) => {
-      assert.equal(url, config.url + '/rest/v1/rpc/upload_reaction_trials');
-      const request = {url, options, rows: JSON.parse(options.body).trials};
-      requests.push(request);
-      return respond(request, requests.length);
-    }
+    setTimeout: () => 1, clearTimeout() {},
+    fetch: (...args) => { network.push(args); throw Error('Unexpected network request from experiment'); }
   });
-  for (const file of ['results-store.js', 'sketch.js']) {
-    vm.runInContext(fs.readFileSync(path.join(root, file), 'utf8'), context, {filename: file});
-  }
+  const scripts = [...markup.matchAll(/<script\b[^>]*\bsrc="([^"]+)"[^>]*>/g)].map(match => match[1].split('?')[0]);
+  for (const file of scripts) vm.runInContext(fs.readFileSync(path.join(root, file), 'utf8'), context, {filename: file});
   const get = id => document.getElementById(id);
   const click = element => {
     if (typeof element === 'string') element = get(element);
@@ -121,137 +102,124 @@ function browser(respond = async () => success()) {
     element.emit('click', event);
   };
   return {
-    get, click, requests, window, document,
-    begin() {
-      get('participant').value = '01';
-      get('session-form').emit('submit');
-    },
-    trial() {
+    get, click, downloads, copied, confirmations, network, scripts,
+    begin(user = '01') { get('participant').value = user; get('session-form').emit('submit'); },
+    trial({miss = false} = {}) {
       click('start');
       const target = get('targets').children.find(button => button.classList.contains('lit'));
       assert.ok(target, 'The actual experiment must light a target');
+      if (miss) click('arena');
       clock += 125;
       click(target);
     },
-    async advance(milliseconds) {
-      const end = clock + milliseconds;
-      await settle();
-      while (true) {
-        const next = [...timers].filter(([, timer]) => timer.due <= end).sort((a, b) => a[1].due - b[1].due)[0];
-        if (!next) break;
-        clock = next[1].due;
-        timers.delete(next[0]);
-        next[1].callback();
-        await settle();
-      }
-      clock = end;
-      await settle();
+    unload() {
+      const event = {prevented: false, preventDefault() { this.prevented = true; }};
+      window.emit('beforeunload', event);
+      return event;
     }
   };
 }
 
-async function completeExperiment(app) {
+function completeExperiment(app) {
   app.begin();
   for (let block = 1; block <= 3; block++) {
-    const before = app.requests.length;
-    for (let trial = 1; trial <= 20; trial++) {
-      app.trial();
-      if (trial < 20) {
-        await settle();
-        assert.equal(app.requests.length, before, 'No uploads during active or ready trials');
-      }
-    }
-    await settle();
+    for (let trial = 1; trial <= 20; trial++) app.trial({miss: block === 1 && trial === 1});
     if (block < 3) app.click('continue');
   }
 }
 
-test('all 60 actual pointer trials upload, including block 3, and completion waits for the final save', async () => {
-  let resolveFinal;
-  const app = browser(request => request.rows.some(row => row.block_number === 3)
-    ? new Promise(resolve => { resolveFinal = resolve; }) : success());
-  await completeExperiment(app);
-  const uploaded = app.requests.flatMap(request => request.rows);
-  assert.equal(uploaded.length, 60);
-  assert.deepEqual(uploaded.filter(row => row.block_number === 3).map(row => row.trial_number),
-    Array.from({length: 20}, (_, i) => i + 1));
+test('all 60 pointer trials export complete CSV data through downloads and copying without network calls', async () => {
+  const app = browser();
+  completeExperiment(app);
+  assert.deepEqual(app.scripts, ['sketch.js']);
+  assert.equal(app.network.length, 0);
   assert.equal(app.get('results').hidden, false);
-  assert.equal(app.get('results-title').textContent, 'Saving results…');
-  assert.match(app.get('completion-status').textContent, /keep this page open/i);
-  assert.equal(app.get('new-session').disabled, true);
-  app.click('new-session');
-  assert.equal(app.get('results').hidden, false, 'Pending data cannot be discarded through the completion button');
-  resolveFinal(success());
-  await settle();
   assert.equal(app.get('results-title').textContent, 'Test complete');
-  assert.match(app.get('completion-status').textContent, /all results saved/i);
-  assert.equal(app.get('new-session').disabled, false);
-});
-
-test('a failed final upload retries automatically and retains the exact final 20 records', async () => {
-  let finalAttempts = 0;
-  const app = browser(request => request.rows.some(row => row.block_number === 3) && ++finalAttempts === 1
-    ? failure() : success());
-  await completeExperiment(app);
-  assert.equal(finalAttempts, 1);
-  assert.equal(app.get('new-session').disabled, true);
-  await app.advance(999);
-  assert.equal(finalAttempts, 1);
-  await app.advance(1);
-  assert.equal(finalAttempts, 2);
-  assert.deepEqual(app.requests[3].rows, app.requests[2].rows);
-  assert.equal(app.get('results-title').textContent, 'Test complete');
-  assert.equal(app.get('new-session').disabled, false);
-});
-
-test('retries stop after three attempts and a CSV backup unlocks the next participant', async () => {
-  const app = browser(request => request.rows.some(row => row.block_number === 3) ? failure() : success());
-  await completeExperiment(app);
-  await app.advance(1000 + 3000 + 10000 + 30000);
-  assert.equal(app.requests.length, 6, 'Two saved blocks plus the initial final upload and three retries');
-  assert.equal(app.get('results-title').textContent, 'Saving results…');
-  assert.equal(app.get('new-session').disabled, true);
+  assert.match(app.get('completion-status').textContent, /download.*csv.*send/i);
+  const csv = app.get('csv-preview').value;
+  const [actualHeader, ...records] = csv.trimEnd().split('\r\n');
+  assert.equal(actualHeader, header);
+  assert.equal(records.length, 60);
+  records.forEach((record, index) => assert.deepEqual(record.split(','),
+    ['01', String(Math.floor(index / 20) + 1), String(index % 20 + 1), '125', index === 0 ? '1' : '0']));
   app.click('download');
-  assert.equal(app.get('new-session').disabled, false);
-  assert.match(app.get('completion-status').textContent, /keep this page open/i);
+  assert.equal(app.downloads[0].filename, 'reaction-time-participant-01.csv');
+  assert.equal(app.downloads[0].blob.type, 'text/csv;charset=utf-8;');
+  assert.equal(await app.downloads[0].blob.text(), csv);
+  app.click('copy');
+  await settle();
+  assert.deepEqual(app.copied, [csv]);
+  assert.equal(app.unload().prevented, false);
+  app.click('new-session');
+  assert.equal(app.confirmations.length, 0);
+  assert.equal(app.get('setup').hidden, false);
 });
 
-test('a scheduled retry waits until a safe point if the participant starts the next block', async () => {
-  const app = browser((request, attempt) => attempt === 1 ? failure() : success());
+test('starting another participant requires confirmation until results have been exported', () => {
+  let allow = false;
+  const app = browser({confirm: () => allow});
+  completeExperiment(app);
+  app.click('new-session');
+  assert.equal(app.confirmations.length, 1);
+  assert.equal(app.get('results').hidden, false);
+  allow = true;
+  app.click('new-session');
+  assert.equal(app.confirmations.length, 2);
+  assert.equal(app.get('results').hidden, true);
+  assert.equal(app.get('setup').hidden, false);
+});
+
+test('unexported trials warn before closing, and new trials require another export', () => {
+  const app = browser();
+  assert.equal(app.unload().prevented, false);
   app.begin();
-  for (let trial = 0; trial < 20; trial++) app.trial();
-  await settle();
-  app.click('continue');
-  await app.advance(500);
-  assert.equal(app.requests.length, 1, 'No retry while waiting to start a trial');
-  app.click('start');
-  await app.advance(500);
-  assert.equal(app.requests.length, 1, 'The retry timer cannot upload during an active trial');
-  app.click(app.get('targets').children.find(button => button.classList.contains('lit')));
-  for (let trial = 1; trial < 20; trial++) app.trial();
-  await settle();
-  assert.equal(app.requests.length, 2);
-  assert.equal(app.requests[1].rows.length, 40, 'The next block break retries both retained and new records');
+  app.trial();
+  assert.equal(app.unload().prevented, true);
+  assert.equal(app.unload().returnValue, '');
+  app.click('download-partial');
+  assert.equal(app.unload().prevented, false);
+  app.trial();
+  assert.equal(app.unload().prevented, true);
 });
 
-test('hiding or leaving the page pauses trials and safely uploads completed partial records', async t => {
-  for (const lifecycle of ['visibilitychange', 'pagehide']) {
-    await t.test(lifecycle, async () => {
-      const app = browser();
-      app.begin();
-      for (let trial = 0; trial < 3; trial++) app.trial();
-      await settle();
-      assert.equal(app.requests.length, 0);
-      if (lifecycle === 'visibilitychange') {
-        app.click('start');
-        app.document.hidden = true;
-        app.document.emit('visibilitychange');
-      } else app.window.emit('pagehide');
-      await settle();
-      assert.equal(app.get('overlay-title').textContent, 'Test paused');
-      assert.equal(app.requests.length, 1);
-      assert.deepEqual(app.requests[0].rows.map(row => row.trial_number), [1, 2, 3]);
-      assert.ok(app.get('targets').children.every(button => !button.classList.contains('lit')));
-    });
-  }
+test('clipboard failure selects the visible CSV fallback and preserves the export warning', async () => {
+  const app = browser({clipboard: false});
+  completeExperiment(app);
+  app.click('copy');
+  await settle();
+  assert.equal(app.get('csv-preview').parentElement.open, true);
+  assert.equal(app.get('csv-preview').selected, true);
+  assert.match(app.get('export-status').textContent, /Ctrl\+C/);
+  assert.equal(app.unload().prevented, true);
+});
+
+test('the same browser can download its previous session after reopening', async () => {
+  const storage = memoryStorage();
+  const first = browser({storage});
+  first.begin();
+  for (let trial = 0; trial < 3; trial++) first.trial();
+  first.click('download-partial');
+  const expected = await first.downloads[0].blob.text();
+  const reopened = browser({storage});
+  assert.equal(reopened.get('recover').hidden, false);
+  reopened.click('recover');
+  assert.equal(reopened.downloads[0].filename, 'reaction-time-participant-01.csv');
+  assert.equal(await reopened.downloads[0].blob.text(), expected);
+});
+
+test('unavailable browser storage still permits all 60 trials and a complete CSV download', async () => {
+  const app = browser({storage: {getItem() { throw Error('Storage blocked'); }, setItem() { throw Error('Storage blocked'); }}});
+  completeExperiment(app);
+  assert.equal(app.get('storage-warning').hidden, false);
+  app.click('download');
+  assert.equal((await app.downloads[0].blob.text()).trimEnd().split('\r\n').length, 61);
+});
+
+test('cached markup without the new completion paragraph still displays and exports every block', () => {
+  const app = browser({legacyMarkup: true});
+  assert.equal(app.get('completion-status'), null);
+  completeExperiment(app);
+  assert.equal(app.get('results').hidden, false);
+  assert.equal(app.get('csv-preview').value.trimEnd().split('\r\n').length, 61);
+  assert.equal(app.network.length, 0);
 });
